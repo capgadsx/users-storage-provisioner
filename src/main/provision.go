@@ -17,16 +17,18 @@ import (
 )
 
 func main() {
+	var provisionerName string
+	var dataDirectory string
+	var nfsServer string
+	var nfsPath string
+	var ownerAnnotation string
+	flag.StringVar(&provisionerName, "-name", "storage.example.com/custom", "The name of this provisioner")
+	flag.StringVar(&dataDirectory, "-data", "/data", "Path were pv's are created inside the container")
+	flag.StringVar(&nfsServer, "-server", "127.0.0.1", "NFS Server were pv's are stored ")
+	flag.StringVar(&nfsPath, "-path", "/exports/pvs", "NFS Path were pv's are stored")
+	flag.StringVar(&ownerAnnotation, "-ann", "storage.example.com/owner", "Annotation used to identify owner user of the provisioned pv")
 	flag.Parse()
 	flag.Set("logtostderr", "true")
-	//TODO: This variables should be flags
-	provisionerName := "storage.cuda.labcomp.cl/users-provisioner"
-	backendDirectory := "/persistentVolumesData"
-	nfsServer := "nfs2.labcomp.cl"
-	nfsPath := "/exports/cuda/users-pvs"
-	ownerAnnotation := "storage.cuda.labcomp.cl/owner"
-	archivedPVPrefix := "deleted"
-	//END
 	glog.Info("Starting custom dynamic pv provisioner")
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -41,32 +43,30 @@ func main() {
 		glog.Fatalf("Error getting server version: %v", err)
 	}
 	provisioner := &CustomNFSUsersProvisioner{
-		backendDirectory: backendDirectory,
-		server:           nfsServer,
-		path:             nfsPath,
-		ownerAnnotation:  ownerAnnotation,
-		archivedPVPrefix: archivedPVPrefix,
+		dataDirectory:   dataDirectory,
+		server:          nfsServer,
+		path:            nfsPath,
+		ownerAnnotation: ownerAnnotation,
 	}
 	provisionController := controller.NewProvisionController(clientSet, provisionerName, provisioner, serverVersion.GitVersion)
 	provisionController.Run(wait.NeverStop)
 }
 
 type CustomNFSUsersProvisioner struct {
-	backendDirectory string
-	server           string
-	path             string
-	ownerAnnotation  string
-	archivedPVPrefix string
+	dataDirectory   string
+	server          string
+	path            string
+	ownerAnnotation string
 }
 
 func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
-	glog.Infof("Creating new pv %v", options.PVName)
 	ownerUser, found := options.PVC.ObjectMeta.Annotations[provisioner.ownerAnnotation]
 	if !found {
 		return nil, errors.New(fmt.Sprintf("missing '%v' annotation", provisioner.ownerAnnotation))
 	}
+	glog.Infof("Creating new pv %v for user %v", options.PVName, ownerUser)
 	customPVName := strings.Join([]string{"pv", ownerUser}, "-")
-	pvPath := filepath.Join(provisioner.backendDirectory, customPVName)
+	pvPath := filepath.Join(provisioner.dataDirectory, customPVName)
 	glog.Infof("Creating path %v", pvPath)
 	if err := os.MkdirAll(pvPath, 0740); err != nil {
 		return nil, errors.New(fmt.Sprintf("failed to create directory %v (caused by %v)", pvPath, err))
@@ -97,11 +97,7 @@ func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.Volum
 }
 
 func (provisioner *CustomNFSUsersProvisioner) Delete(volume *v1.PersistentVolume) error {
-	glog.Infof("Deleting pv %v", volume.Name)
-	path := volume.Spec.PersistentVolumeSource.NFS.Path
-	pvName := filepath.Base(path)
-	oldPath := filepath.Join(provisioner.backendDirectory, pvName)
-	archivedPath := filepath.Join(provisioner.backendDirectory, provisioner.archivedPVPrefix+"-"+pvName)
-	glog.Infof("Archiving path %v to %v", oldPath, archivedPath)
-	return os.Rename(oldPath, archivedPath)
+	glog.Infof("Deleting pv %v from database", volume.Name)
+	//Since this contains the user home, we don't delete the files..
+	return nil
 }
