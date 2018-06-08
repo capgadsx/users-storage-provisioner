@@ -22,11 +22,11 @@ func main() {
 	var nfsServer string
 	var nfsPath string
 	var ownerAnnotation string
-	flag.StringVar(&provisionerName, "-name", "storage.example.com/custom", "The name of this provisioner")
-	flag.StringVar(&dataDirectory, "-data", "/data", "Path were pv's are created inside the container")
-	flag.StringVar(&nfsServer, "-server", "127.0.0.1", "NFS Server were pv's are stored ")
-	flag.StringVar(&nfsPath, "-path", "/exports/pvs", "NFS Path were pv's are stored")
-	flag.StringVar(&ownerAnnotation, "-ann", "storage.example.com/owner", "Annotation used to identify owner user of the provisioned pv")
+	flag.StringVar(&provisionerName, "name", "storage.example.com/custom", "The name of this provisioner")
+	flag.StringVar(&dataDirectory, "data", "/data", "Path were pv's are created inside the container")
+	flag.StringVar(&nfsServer, "server", "127.0.0.1", "NFS Server were pv's are stored ")
+	flag.StringVar(&nfsPath, "path", "/exports/pvs", "NFS Path were pv's are stored")
+	flag.StringVar(&ownerAnnotation, "ann", "storage.example.com/owner", "Annotation used to identify owner user of the provisioned pv")
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 	glog.Info("Starting custom dynamic pv provisioner")
