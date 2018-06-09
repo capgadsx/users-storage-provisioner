@@ -72,15 +72,23 @@ func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.Volum
 	}
 	glog.Infof("Creating new pv %v for user %v", options.PVName, ownerUser)
 	customPVName := strings.Join([]string{"pv", ownerUser}, "-")
-	pvPath := filepath.Join(provisioner.dataDirectory, customPVName)
-	glog.Infof("Creating path %v", pvPath)
-	if err := os.MkdirAll(pvPath, 0740); err != nil {
-		return nil, errors.New(fmt.Sprintf("failed to create directory %v (caused by %v)", pvPath, err))
+	pvRootPath := filepath.Join(provisioner.dataDirectory, customPVName)
+	pvUserVolumePath := filepath.Join(pvRootPath, "volume")
+	pvSuccessFlagPath := filepath.Join(pvRootPath, ".success")
+	if _, err := os.Stat(pvSuccessFlagPath); os.IsNotExist(err) {
+		if err := os.RemoveAll(pvRootPath); err != nil {
+			return nil, errors.New(fmt.Sprintf("failed to remove directory %v (caused by %v)", pvRootPath, err))
+		}
+		glog.Infof("Creating path %v", pvUserVolumePath)
+		if err := os.MkdirAll(pvUserVolumePath, 0740); err != nil {
+			return nil, errors.New(fmt.Sprintf("failed to create directory %v (caused by %v)", pvUserVolumePath, err))
+		}
+		os.OpenFile(filepath.Join(pvUserVolumePath, "USER_FILE1"), os.O_RDONLY|os.O_CREATE, 0600)
+		os.OpenFile(filepath.Join(pvUserVolumePath, "USER_FILE2"), os.O_RDONLY|os.O_CREATE, 0600)
+		os.OpenFile(pvSuccessFlagPath, os.O_RDONLY|os.O_CREATE, 0400)
 	}
-	os.OpenFile(filepath.Join(pvPath, ".cuda_success"), os.O_RDONLY|os.O_CREATE, 0666)
-	os.Chmod(pvPath, 0740)
-	mountPath := filepath.Join(provisioner.path, customPVName)
-	glog.Infof("NFS path for new PVSource: %v:%v", provisioner.server, mountPath)
+	mountPath := filepath.Join(provisioner.path, customPVName, "volume")
+	glog.Infof("NFS path for new PersistentVolumeSource: '%v:%v'", provisioner.server, mountPath)
 	pv := &v1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: options.PVName,
