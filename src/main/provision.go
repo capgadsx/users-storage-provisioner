@@ -30,6 +30,12 @@ func main() {
 	flag.Parse()
 	flag.Set("logtostderr", "true")
 	glog.Info("Starting custom dynamic pv provisioner")
+	glog.Infof("Flags:")
+	glog.Infof("		-name: %v", provisionerName)
+	glog.Infof("		-data: %v", dataDirectory)
+	glog.Infof("		-server: %v", nfsServer)
+	glog.Infof("		-path: %v", nfsPath)
+	glog.Infof("		-ann: %v", ownerAnnotation)
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		glog.Fatalf("Failed to get cluster config: %v", err)
