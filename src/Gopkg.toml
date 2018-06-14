@@ -17,3 +17,7 @@
 [[constraint]]
   branch = "master"
   name = "github.com/golang/glog"
+
+[[constraint]]
+  name = "github.com/go-ldap/ldap"
+  version = "2.5.1"
