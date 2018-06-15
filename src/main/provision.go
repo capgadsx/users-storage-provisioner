@@ -16,11 +16,15 @@ import (
 	"github.com/golang/glog"
 	"github.com/go-ldap/ldap"
 	"strconv"
+	"compress/gzip"
+	"io"
+	"archive/tar"
 )
 
 func main() {
 	var provisionerName string
 	var dataDirectory string
+	var baseArchive string
 	var nfsServer string
 	var nfsPath string
 	var ownerAnnotation string
@@ -31,6 +35,7 @@ func main() {
 	var ldapGID string
 	flag.StringVar(&provisionerName, "name", "storage.example.com/custom", "The name of this provisioner")
 	flag.StringVar(&dataDirectory, "data", "/data", "Path were pv's are created inside the container")
+	flag.StringVar(&baseArchive, "base", "/data/base.tar.gz", "Archive containing the base directory tree to extract in the provisioned folder (only .tar.gz files supported for now)")
 	flag.StringVar(&nfsServer, "server", "127.0.0.1", "NFS Server were pv's are stored ")
 	flag.StringVar(&nfsPath, "path", "/exports/pvs", "NFS Path were pv's are stored")
 	flag.StringVar(&ownerAnnotation, "ann", "storage.example.com/owner", "Annotation used to identify owner user of the provisioned pv")
@@ -45,6 +50,7 @@ func main() {
 	glog.Infof("Flags:")
 	glog.Infof("		-name: %v", provisionerName)
 	glog.Infof("		-data: %v", dataDirectory)
+	glog.Infof("		-base: %v", baseArchive)
 	glog.Infof("		-server: %v", nfsServer)
 	glog.Infof("		-path: %v", nfsPath)
 	glog.Infof("		-ann: %v", ownerAnnotation)
@@ -70,6 +76,7 @@ func main() {
 		server:          nfsServer,
 		path:            nfsPath,
 		ownerAnnotation: ownerAnnotation,
+		baseArchive:     baseArchive,
 		ldap: LDAPConfig{
 			server:       ldapServer,
 			baseDN:       ldapBaseDN,
@@ -95,20 +102,21 @@ type CustomNFSUsersProvisioner struct {
 	server          string
 	path            string
 	ownerAnnotation string
+	baseArchive     string
 	ldap            LDAPConfig
 }
 
 func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.VolumeOptions) (*v1.PersistentVolume, error) {
-	ownerUser, found := options.PVC.ObjectMeta.Annotations[provisioner.ownerAnnotation]
+	owner, found := options.PVC.ObjectMeta.Annotations[provisioner.ownerAnnotation]
 	if !found {
 		return nil, errors.New(fmt.Sprintf("missing '%v' annotation", provisioner.ownerAnnotation))
 	}
-	userUID, userGID, err := GetUserGidUid(ownerUser, provisioner.ldap.server, provisioner.ldap.baseDN, provisioner.ldap.userFilter, provisioner.ldap.uidAttribute, provisioner.ldap.gidAttribute)
+	userUID, userGID, err := GetUserGidUid(owner, provisioner.ldap.server, provisioner.ldap.baseDN, provisioner.ldap.userFilter, provisioner.ldap.uidAttribute, provisioner.ldap.gidAttribute)
 	if err != nil {
 		return nil, err
 	}
-	glog.Infof("Creating new pv %v for user %v (uid: %v gid: %v)", options.PVName, ownerUser, userUID, userGID)
-	customPVName := strings.Join([]string{"pv", ownerUser}, "-")
+	glog.Infof("Creating new pv %v for user %v (uid: %v gid: %v)", options.PVName, owner, userUID, userGID)
+	customPVName := strings.Join([]string{"pv", owner}, "-")
 	pvRootPath := filepath.Join(provisioner.dataDirectory, customPVName)
 	pvUserVolumePath := filepath.Join(pvRootPath, "volume")
 	pvSuccessFlagPath := filepath.Join(pvRootPath, ".success")
@@ -120,11 +128,12 @@ func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.Volum
 		if err := os.MkdirAll(pvUserVolumePath, 0740); err != nil {
 			return nil, errors.New(fmt.Sprintf("failed to create directory %v (caused by %v)", pvUserVolumePath, err))
 		}
-		os.OpenFile(filepath.Join(pvUserVolumePath, "USER_FILE1"), os.O_RDONLY|os.O_CREATE, 0600)
-		os.OpenFile(filepath.Join(pvUserVolumePath, "USER_FILE2"), os.O_RDONLY|os.O_CREATE, 0600)
-		os.Chown(filepath.Join(pvUserVolumePath, "USER_FILE1"), userUID, userGID)
-		os.Chown(filepath.Join(pvUserVolumePath, "USER_FILE2"), userUID, userGID)
-		os.OpenFile(pvSuccessFlagPath, os.O_RDONLY|os.O_CREATE, 0400)
+		os.Chown(pvUserVolumePath, userUID, userGID)
+		//TODO: Show progress while extracting
+		if err = ExtractBase(provisioner.baseArchive, provisioner.dataDirectory, pvUserVolumePath, owner, userUID, userGID); err != nil {
+			return nil, err
+		}
+		os.Create(pvSuccessFlagPath)
 	}
 	mountPath := filepath.Join(provisioner.path, customPVName, "volume")
 	glog.Infof("NFS path for new PersistentVolumeSource: '%v:%v'", provisioner.server, mountPath)
@@ -179,4 +188,80 @@ func GetUserGidUid(username, ldapServerAddr, baseDN, userFilter, uidAttribute, g
 		return -1, -1, err
 	}
 	return uid, gid, nil
+}
+
+func ExtractBase(archive, tmpFolder, target, owner string, uid, gid int) error {
+	if !strings.HasSuffix(archive, "tar.gz") {
+		return errors.New("unsupported archive format (only .tar.gz is supported at the moment)")
+	}
+	tmpTarPath := filepath.Join(tmpFolder, fmt.Sprintf("tmp-%s.tar", owner))
+	if err := ExtractGZIP(archive, tmpTarPath); err != nil {
+		return err
+	}
+	defer os.Remove(tmpTarPath)
+	if err := ExtractTAR(tmpTarPath, target, uid, gid); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ExtractTAR(source, targetFolder string, uid, gid int) error {
+	tarFile, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer tarFile.Close()
+	reader := tar.NewReader(tarFile)
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return err
+		}
+		path := filepath.Join(targetFolder, header.Name)
+		info := header.FileInfo()
+		if info.IsDir() {
+			if err = os.MkdirAll(path, info.Mode()); err != nil {
+				return err
+			}
+			if err = os.Chown(path, uid, gid); err != nil {
+				return err
+			}
+			continue
+		}
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode())
+		if err != nil {
+			return err
+		}
+		_, err = io.Copy(file, reader)
+		file.Close()
+		if err != nil {
+			return err
+		}
+		if err = os.Chown(path, uid, gid); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ExtractGZIP(source, target string) error {
+	file, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	targetFile, err := os.Create(target)
+	if err != nil {
+		return err
+	}
+	defer targetFile.Close()
+	_, err = io.Copy(targetFile, reader)
+	return err
 }
