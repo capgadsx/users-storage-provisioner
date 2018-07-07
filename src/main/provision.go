@@ -129,7 +129,6 @@ func (provisioner *CustomNFSUsersProvisioner) Provision(options controller.Volum
 			return nil, errors.New(fmt.Sprintf("failed to create directory %v (caused by %v)", pvUserVolumePath, err))
 		}
 		os.Chown(pvUserVolumePath, userUID, userGID)
-		//TODO: Show progress while extracting
 		if err = ExtractBase(provisioner.baseArchive, provisioner.dataDirectory, pvUserVolumePath, owner, userUID, userGID); err != nil {
 			return nil, err
 		}
@@ -206,6 +205,7 @@ func ExtractBase(archive, tmpFolder, target, owner string, uid, gid int) error {
 }
 
 func ExtractTAR(source, targetFolder string, uid, gid int) error {
+	glog.Infof("Extracting tar file %v", source)
 	tarFile, err := os.Open(source)
 	if err != nil {
 		return err
@@ -243,10 +243,12 @@ func ExtractTAR(source, targetFolder string, uid, gid int) error {
 			return err
 		}
 	}
+	glog.Infof("Done extracting tar")
 	return nil
 }
 
 func ExtractGZIP(source, target string) error {
+	glog.Infof("Extracting gzip file %v", source)
 	file, err := os.Open(source)
 	if err != nil {
 		return err
@@ -263,5 +265,6 @@ func ExtractGZIP(source, target string) error {
 	}
 	defer targetFile.Close()
 	_, err = io.Copy(targetFile, reader)
+	glog.Infof("Done extracting gzip")
 	return err
 }
